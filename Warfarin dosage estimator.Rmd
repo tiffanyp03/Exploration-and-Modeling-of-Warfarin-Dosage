@@ -1,0 +1,438 @@
+---
+title: "Exploration and Modeling of Warfarin Dosage"
+author: "Tiffany Pang"
+date: "12/14/2017"
+output: html_document
+---
+
+The objective of the project is to classify and predict therapeutic warfarin dosage. The warfarin dosing estimator [http://warfarindosing.org/Source/Home.aspx] is used as a reference as to which variables to include in the model. 
+```{r warning=FALSE, message=FALSE}
+library(dplyr)
+library(stringr)
+setwd("/Users/tiffany/Documents/USF_MSHI/HS 630/HS630_Assignments/Warfarin")
+
+iwpc_data <- read.delim("iwpc_warfarin.txt", header = TRUE, sep = "\t", dec = ".")
+```
+
+## Data Cleaning
+
+The variables are renamed for easier referencing. 
+```{r warning=FALSE, message=FALSE}
+# Rename the variables
+names(iwpc_data)[names(iwpc_data) == "PharmGKB.Subject.ID"] <- "subject_id"
+names(iwpc_data)[names(iwpc_data) == "PharmGKB.Sample.ID"] <- "sample_id"
+names(iwpc_data)[names(iwpc_data) == "Project.Site"] <- "project_site"
+names(iwpc_data)[names(iwpc_data) == "Gender"] <- "gender"
+names(iwpc_data)[names(iwpc_data) == "Race..Reported."] <- "race_reported"
+names(iwpc_data)[names(iwpc_data) == "Race..OMB."] <- "race_omb"
+names(iwpc_data)[names(iwpc_data) == "Ethnicity..Reported."] <- "ethnicity_reported"
+names(iwpc_data)[names(iwpc_data) == "Ethnicity..OMB."] <- "ethnicity_omb"
+names(iwpc_data)[names(iwpc_data) == "Age"] <- "age"
+names(iwpc_data)[names(iwpc_data) == "Height..cm."] <- "height"
+names(iwpc_data)[names(iwpc_data) == "Weight..kg."] <- "weight"
+names(iwpc_data)[names(iwpc_data) == "Indication.for.Warfarin.Treatment"] <- "indication"
+names(iwpc_data)[names(iwpc_data) == "Comorbidities"] <- "comorbidities"
+names(iwpc_data)[names(iwpc_data) == "Medications"] <- "medications"
+names(iwpc_data)[names(iwpc_data) == "Target.INR"] <- "target_inr"
+names(iwpc_data)[names(iwpc_data) == "Estimated.Target.INR.Range.Based.on.Indication"] <- "target_inr_estimated"
+names(iwpc_data)[names(iwpc_data) == "Subject.Reached.Stable.Dose.of.Warfarin"] <- "reached_stable_dose"
+names(iwpc_data)[names(iwpc_data) == "Therapeutic.Dose.of.Warfarin"] <- "therapeutic_warfarin_dose"
+names(iwpc_data)[names(iwpc_data) == "INR.on.Reported.Therapeutic.Dose.of.Warfarin"] <- "inr_on_warfarin"
+names(iwpc_data)[names(iwpc_data) == "Current.Smoker"] <- "smoker"
+names(iwpc_data)[names(iwpc_data) == "VKORC1..1639.consensus"] <- "VKORC1"
+names(iwpc_data)[names(iwpc_data) == "CYP2C9.consensus"] <- "CYP2C9"
+```
+
+Next Excel date error for target_inr_estimated and age variables are fixed. The age variable holds age as the number of decades for that patient.
+```{r warning=FALSE, message=FALSE}
+# Fix Excel date error for target_inr_estimated
+levels(iwpc_data$target_inr_estimated)[levels(iwpc_data$target_inr_estimated)=="3-Feb"] <- "2-3"
+iwpc_data$target_inr_estimated[iwpc_data$target_inr_estimated == levels(iwpc_data$target_inr_estimated)[7]] <- levels(iwpc_data$target_inr_estimated)[6]
+iwpc_data$target_inr_estimated <- droplevels(iwpc_data$target_inr_estimated)
+iwpc_data$target_inr_estimated <- factor(iwpc_data$target_inr_estimated, levels=c("1.7-2.8", "1.7-3.3", "2-3", "2-3.5", "2.5-3.5", "3.0-4.0"))
+summary(iwpc_data$target_inr_estimated)
+# Fix Age format
+levels(iwpc_data$age)[levels(iwpc_data$age)=="19-Oct"] <- "10 - 19"
+summary(iwpc_data$age)
+```
+
+For medications the patient is taking, the following two Boolean variables (amiodarone_bool and enzyme_inducer_bool) are created to indicate a) whether the patient is taking Amiodarone, and b) whether the patient is taking an Enzyme Inducer (rifampin, carbamazepine, phenytoin or rifampicin).
+```{r warning=FALSE, message=FALSE}
+# Create Boolean column for Amiodarone
+iwpc_data$amiodarone_bool <- ifelse(!is.na(iwpc_data$medications) & str_detect(iwpc_data$medications, "amiodarone"),
+                                      yes = 1,
+                                      no = 0)
+iwpc_data$amiodarone_bool[str_detect(iwpc_data$medications, "not amiodarone")==T] = 0
+iwpc_data$amiodarone_bool[str_detect(iwpc_data$medications, "no amiodarone")==T] = 0
+count(iwpc_data, iwpc_data$amiodarone_bool)
+
+# Create Boolean column for rifampin, carbamazepine, phenytoin or rifampicin
+iwpc_data$enzyme_inducer_bool <- ifelse(!is.na(iwpc_data$medications) & str_detect(iwpc_data$medications, "rifampin|carbamazepine|phenytoin|rifampicin"),
+                                    yes = 1,
+                                    no = 0)
+iwpc_data$enzyme_inducer_bool[str_detect(iwpc_data$medications, "not rifampin|not carbamazepine|not phenytoin|not rifampicin")==T] = 0
+iwpc_data$enzyme_inducer_bool[str_detect(iwpc_data$medications, "no rifampin|no carbamazepine|no phenytoin|no rifampicin")==T] = 0
+count(iwpc_data, iwpc_data$enzyme_inducer_bool)
+```
+
+## Data Exploration
+
+Only the key variables are chosen for further data analysis. 
+```{r warning=FALSE, message=FALSE}
+iwpc_df <- select(iwpc_data, gender, race_omb, ethnicity_omb, age, height, weight, target_inr, target_inr_estimated, therapeutic_warfarin_dose, smoker, CYP2C9, VKORC1, amiodarone_bool, enzyme_inducer_bool)
+```
+
+The dataframe is further divided into two subsets: a subset for patients with high warfarin dosage (0.2 or more standard deviations above the mean) and a subset for patients with low warfarin dosage (0.2 or more standard deviations below the mean).
+
+```{r warning=FALSE, message=FALSE}
+summary(iwpc_df$therapeutic_warfarin_dose)
+sd_cutoff <- 0.2 * sd(iwpc_df$therapeutic_warfarin_dose, na.rm = TRUE)
+mean_val <- mean(iwpc_df$therapeutic_warfarin_dose, na.rm = TRUE)
+high <- mean_val + sd_cutoff
+low <- mean_val - sd_cutoff
+
+# create dosage_level column
+iwpc_df$dosage_level <- ifelse(iwpc_df$therapeutic_warfarin_dose >= high, "high", NA)
+iwpc_df$dosage_level <- ifelse(iwpc_df$therapeutic_warfarin_dose <= low, "low", iwpc_df$dosage_level)
+iwpc_df$dosage_level <- ifelse(iwpc_df$therapeutic_warfarin_dose < high & iwpc_df$therapeutic_warfarin_dose > low, "med", iwpc_df$dosage_level)
+count(iwpc_df, iwpc_df$dosage_level)
+# Subset dataset based on high warfarin dosage (0.2 or more standard deviations above the mean) and low warfarin dosage (0.2 or more standard deviations below the mean)
+high_wafarin_dosage <- filter(iwpc_df, therapeutic_warfarin_dose >= high)
+low_wafarin_dosage <- filter(iwpc_df, therapeutic_warfarin_dose <= low)
+
+summary(high_wafarin_dosage)
+summary(low_wafarin_dosage)
+```
+
+The high and low warfarin dosage subsets are then combined into one dataframe as iwpc_hl. 
+```{r warning=FALSE, message=FALSE}
+iwpc_hl <- filter(iwpc_df, dosage_level == "high" | dosage_level == "low")
+```
+
+## Data Visualization
+
+The following plots are created to visualize the data.
+```{r warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+theme_set(theme_cowplot(font_size=10)) 
+
+# Boxplot of Current Smoker by Gender
+high_dose_amio <- ggplot(high_wafarin_dosage, aes(x=factor(amiodarone_bool), y=therapeutic_warfarin_dose)) + # categorical variable on x-axis
+  geom_boxplot(aes(fill = factor(amiodarone_bool))) +
+  labs(title = "Warfarin_dose by Amiodarone_bool\n (High warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  theme(plot.title=element_text(hjust=0.5, size=10, face="bold", color="darkgreen"))
+low_dose_amio <- ggplot(low_wafarin_dosage, aes(x=factor(amiodarone_bool), y=therapeutic_warfarin_dose)) + # categorical variable on x-axis
+  geom_boxplot(aes(fill = factor(amiodarone_bool))) +
+  labs(title = "Warfarin_dose by Amiodarone_bool\n (Low warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  theme(plot.title=element_text(hjust=0.2, size=10, face="bold", color="darkgreen"))
+plot_grid(low_dose_amio, high_dose_amio)
+```
+
+The patients not taking any Amiodarone seem to get higher dose for Warfarin. 
+
+```{r warning=FALSE, message=FALSE}
+# Count of Age by warfarin_dosage
+age_dosage <- ggplot(iwpc_hl, aes(x=age)) + 
+  geom_bar(aes(fill = factor(dosage_level)), position = "dodge") +
+  labs(title = "Count of Age by Warfarain_dosage\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+age_dosage
+```
+
+Generally, more older patients (>60-year-old) are prescribed lower dose of Warfarin, while more younger patients are prescribed higher dose of Warfarin. 
+
+```{r warning=FALSE, message=FALSE}
+# Ethnicity by warfarin_dosage
+ethnicity_dosage <- ggplot(iwpc_hl, aes(x=ethnicity_omb)) + 
+  geom_bar(aes(fill = factor(dosage_level)), position = "dodge") +
+  labs(title = "Ethnicity by Warfarain_dosage\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+ethnicity_dosage
+```
+
+More patients from Not Hispanic or Latino ethinicity has lower dose for Warfarin, while the other ethinicities generally have similar counts for patients for high and low dosage. 
+
+
+```{r warning=FALSE, message=FALSE}
+# Visualize the count of race by gender
+high_gender <- ggplot(high_wafarin_dosage, aes(x=race_omb)) + 
+  geom_bar(aes(fill = gender), position = "dodge") +
+  labs(title = "Count of Race by Gender\n (High warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+low_gender <- ggplot(low_wafarin_dosage, aes(x=race_omb)) + 
+  geom_bar(aes(fill = gender), position = "dodge") +
+  labs(title = "Count of Race by Gender for\n (Low warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+plot_grid(low_gender, high_gender)
+```
+
+There are more males than females in this dataset, especially more Asian and White males in Low dosage population, and a lot more White males in High dosage population. 
+
+```{r warning=FALSE, message=FALSE}
+# Scatterplot of Height and Weight by Gender
+high_weight <- ggplot(high_wafarin_dosage, aes(x=height,y=weight)) +
+  geom_point(aes(fill=gender, color=gender), size=1.5) +
+  labs(title="Height and Weight by Gender\n (High warfarin dosage)\n") +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=12, face="bold", color="darkgreen"))
+low_weight <- ggplot(low_wafarin_dosage, aes(x=height,y=weight)) +
+  geom_point(aes(fill=gender, color=gender), size=1.5) +
+  labs(title="Height and Weight by Gender\n (Low warfarin dosage)\n") +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=12, face="bold", color="darkgreen"))
+plot_grid(low_weight, high_weight)
+```
+
+Males are generally taller and heavier in comparison to females. 
+
+```{r warning=FALSE, message=FALSE}
+# Scatter of Height and Weight by Dosage
+height_weight <- ggplot(iwpc_df, aes(x=height,y=weight)) +
+  geom_point(aes(fill=factor(dosage_level), color=factor(dosage_level)), size=1.5) +
+  labs(title="Height and Weight by Dosage\n") +
+  theme_bw() +
+  theme(plot.title=element_text(hjust=0.5, size=12, face="bold", color="darkgreen"))
+height_weight
+```
+
+There is no clear pattern for Warfarin dosage by height and weight. There is only a slight pattern for those with shorter height and lower weight have lower Warfarin dosage and those with higher height and heavier weight have higher dosage.  
+
+```{r warning=FALSE, message=FALSE}
+# Visualize the count of CYP2C9 Genotype
+high_CYP2C9 <- ggplot(high_wafarin_dosage, aes(x=CYP2C9)) + 
+  geom_bar(aes(fill = CYP2C9)) + 
+  labs(title = "Count of CYP2C9 Genotype\n (High warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+low_CYP2C9 <- ggplot(low_wafarin_dosage, aes(x=CYP2C9)) + 
+  geom_bar(aes(fill = CYP2C9)) + 
+  labs(title = "Count of CYP2C9 Genotype\n (Low warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+plot_grid(low_CYP2C9, high_CYP2C9)
+```
+
+Patients who have 1 copy of the `CYP2C9*1/*2` SNP are slow metabolizers of S-warfarin; patients who are homozygous for `CYP2C9*2/*2` or who carry at least 1 copy of the `CYP2C9*3`, `CYP2C9*5` or `CYP2C9*6` SNP are very slow metabolizers. Some patients with `CYP2C9*1/*2`SNP are in High dosage population, but those with `CYP2C9*3`, `CYP2C9*5` or `CYP2C9*6` SNP are only in Low dosage population. 
+
+```{r warning=FALSE, message=FALSE}
+# Visualize the count of VKORC1 Genotype
+high_VKORC1 <- ggplot(high_wafarin_dosage, aes(x=VKORC1)) + 
+  geom_bar(aes(fill = VKORC1)) + 
+  labs(title = "Count of VKORC1 Genotype\n (High warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+low_VKORC1 <- ggplot(low_wafarin_dosage, aes(x=VKORC1)) + 
+  geom_bar(aes(fill = VKORC1)) + 
+  labs(title = "Count of VKORC1 Genotype\n (Low warfarin dosage)\n") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  theme(plot.title=element_text(hjust=0.5, size=14, face="bold", color="darkgreen"))
+plot_grid(low_VKORC1, high_VKORC1)
+```
+
+Patients who have the AA genotype (or AA haplotype) are the most warfarin sensitive and therefore often require lower warfarin doses. The plots show that the majority of patients AA genotype are in Low dosage population. 
+
+
+## Regression
+
+Two regression models are fitted: one with therapeutic warfarin dose as the response variable, and the other one with square root of therapeutic warfarin dose. The dataframe for regression models is created with only the key variables.  
+```{r warning=FALSE, message=FALSE}
+iwpc <- select(iwpc_df, gender, race_omb, ethnicity_omb, age, height, weight,
+                          therapeutic_warfarin_dose, CYP2C9, VKORC1, amiodarone_bool, enzyme_inducer_bool)
+summary(iwpc)
+iwpc <- na.omit(iwpc) 
+```
+
+First, the full model is fitted with all variables as the predictor variables. 
+```{r warning=FALSE, message=FALSE}
+fit_full <- lm(therapeutic_warfarin_dose ~ ., data = iwpc)
+summary(fit_full)
+```
+
+```{r warning=FALSE, message=FALSE}
+plot(fit_full, 2)
+```
+
+The Normal Q-Q plot for fit_full model is a bit heavy-tailed, the points curve off in the extremities. It means the data have more extreme values than would be expected if they truly came from a Normal distribution.
+\n
+
+The summary of fit_full does not show which variables are particularly insignificant, it only shows that some dummy variables are insignificant. So, the step function is used for feature selection. 
+
+
+```{r warning=FALSE, message=FALSE}
+fit_null <- lm(therapeutic_warfarin_dose ~ 1, data = iwpc)
+# summary(fit_null)
+
+# step function
+fit_step = step(fit_null, scope=list(lower=fit_null, upper=fit_full),direction="both")
+```
+
+The step function returns the following model as the best model. 
+```{r warning=FALSE, message=FALSE}
+fit_final <- lm(therapeutic_warfarin_dose ~ VKORC1 + age + weight + CYP2C9 + 
+              ethnicity_omb + amiodarone_bool + race_omb + enzyme_inducer_bool, data = iwpc)
+summary(fit_final)
+```
+
+\n
+
+The final model makes sense because gender is not a significant predictor for warfarin dosage and height is correlated to weight, so we only need to include either height or weight. Overall, the model is significant with p-value: < 2.2e-16 and decent Adjusted R-squared of 0.4512.
+
+```{r warning=FALSE, message=FALSE}
+plot(fit_final, 2)
+```
+
+The Normal Q-Q plot for fit_final model is better compared to that of fit_full model, the points curve off lesser here. 
+```{r warning=FALSE, message=FALSE}
+fit_final2 <- lm(sqrt(therapeutic_warfarin_dose) ~ VKORC1 + age + weight + CYP2C9 + 
+                   ethnicity_omb + amiodarone_bool + race_omb + enzyme_inducer_bool, data = iwpc)
+summary(fit_final2)
+```
+
+By using square root for the response variable, Adjusted R-squared value is improved to 0.5122.
+
+```{r warning=FALSE, message=FALSE}
+plot(fit_final2, 2)
+```
+\n
+The Normal Q-Q plot for fit_final2 model is the best out of all the models, the points are almost a striaght line. 
+
+
+## Support Vector Machine (SVM)
+
+First, iwpc_svm dataframe is created with only key variables required for classification. Then, the rows with NA's are removed and factor variables are converted from numeric to factor. 
+
+```{r warning=FALSE, message=FALSE}
+iwpc_svm <- select(iwpc_hl, gender, race_omb, ethnicity_omb, age, weight,  
+                   CYP2C9, VKORC1, amiodarone_bool, enzyme_inducer_bool, dosage_level)
+iwpc_svm <- na.omit(iwpc_svm)
+iwpc_svm$amiodarone_bool <- factor(iwpc_svm$amiodarone_bool)
+iwpc_svm$enzyme_inducer_bool <- factor(iwpc_svm$enzyme_inducer_bool)
+iwpc_svm$dosage_level <- factor(iwpc_svm$dosage_level)
+```
+
+The data is then split into training set (80%) and test set (20%).
+
+```{r warning=FALSE, message=FALSE}
+# Split training and testing sets
+dat <- iwpc_svm
+set.seed(101)
+
+train <- sample(nrow(dat), round(0.8*nrow(dat)))
+trainset <- dat[train, ]
+testset <- dat[-train, ]
+```
+
+The svm() function is used to train a model on the training set, and get a summary of the model.
+
+```{r warning=FALSE, message=FALSE}
+library(e1071)
+model <- svm(dosage_level ~ ., data=trainset, kernel = "radial", cost = 1, gamma = 1)
+summary(model)
+```
+
+Predict function is used to predict new values from the test set using the model. 
+
+```{r warning=FALSE, message=FALSE}
+predicted.values <- predict(model, testset[1:9])
+# confusion matrix 
+table(true=testset$dosage_level, pred=predicted.values)
+```
+
+The confusion matrix shows that there are 210 (33.0%) True Positives and 317 (49.8%) True Negatives. The accuracy comes out to be 82.9%, which is decent. Next, the parameters are tuned in an attempt to improve the model. 
+```{r warning=FALSE, message=FALSE}
+set.seed(101)
+tune.results <- tune(svm, train.x=dosage_level~., data=trainset,kernel='radial',
+                     ranges=list(cost=10^(-1:2), gamma=c(.125, .5,1,2)))
+tune.results 
+```
+
+The best performance occurs with cost=10 and gamma=0.125. The model is trained again with these specific parameters.
+
+```{r warning=FALSE, message=FALSE}
+model_tuned <- svm(dosage_level ~ .,data=trainset, kernel = "radial", cost=10, gamma = 0.125)  
+
+predicted.values.tuned <- predict(model_tuned,testset[1:9])
+table(true=testset$dosage_level, pred=predicted.values.tuned)
+```
+
+With tuned parameters, True Positives improved to 222 (34.9%), but True Negatives went down to 308. So the accuray for the tuned model is 83.3%, it only improved very little. 
+
+
+## Receiver Operating Characteristic (ROC)
+
+In a ROC curve, the true positive rate (Sensitivity) is plotted in function of the false positive rate (100-Specificity) for different cut-off points. Each point on the ROC curve represents a sensitivity/specificity pair corresponding to a particular decision threshold. 
+
+```{r warning=FALSE, message=FALSE}
+library(ROCR)
+# Creating function to plot ROC curve
+rocplot = function(pred, truth, ...) {
+  predob = prediction(pred, truth)
+  perf = performance(predob, "tpr", "fpr")
+  plot(perf, ...)
+}
+
+# Optimal model based on tuning
+svmfit.opt = svm(dosage_level ~ .,
+                 data = trainset,
+                 kernel = "radial",
+                 gamma = 0.125,
+                 cost = 10,
+                 decision.values = T) # to obtain the fitted values for a given SVM model
+
+# γ is increased to produce a more flexible fit and generate further improvements in accuracy
+svmfit.flex = svm(dosage_level ~ .,
+                  data = trainset,
+                  kernel = "radial",
+                  gamma = 50,
+                  cost = 10,
+                  decision.values = T)
+
+fitted1 = attributes(predict(svmfit.opt, trainset,
+                             decision.values = TRUE))$decision.values
+fitted2 = attributes(predict(svmfit.flex, trainset,
+                             decision.values =T))$decision.values
+par(mfrow = c(1,2))
+
+# ROC plot for optimal model
+rocplot(fitted1,                
+        trainset[,'dosage_level'],
+        main = "Training Data")
+# ROC model of flexible model
+rocplot(fitted2, 
+        trainset[,'dosage_level'],
+        add = T,
+        col = "red")
+
+fitted3 = attributes(predict(svmfit.opt, testset,
+                             decision.values = T))$decision.values
+fitted4 = attributes(predict(svmfit.flex, testset,
+                             decision.values =T))$decision.values
+
+rocplot(fitted3,
+        testset[,'dosage_level'],
+        main = "Test Data")
+
+rocplot(fitted4,
+        testset[,'dosage_level'],
+        add = T,
+        col = "red")
+```
+
+In the ROC plots, the black lines are from the optimal model with tuned parameters, and the red lines are from the flexible models with bigger gamma value for a more flexible fit and accuracy. Even though the red line shows a better accuracy in the training data, it has worse accuracy in the test data when compared to the black line. 
